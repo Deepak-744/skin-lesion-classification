@@ -1,9 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   UploadCloud, X, Sparkles, AlertCircle, 
-  Loader2, CheckCircle2, FileCheck, ArrowRight, RefreshCw 
+  Loader2, FileCheck
 } from '../components/Icons';
-import { predictSkinLesion } from '../services/api';
+import { predictSkinLesion, waitForPredictionServer } from '../services/api';
 
 export default function UploadPage({ onPredictionSuccess, sampleImages = [] }) {
   const [selectedFile, setSelectedFile] = useState(null);
@@ -11,9 +11,12 @@ export default function UploadPage({ onPredictionSuccess, sampleImages = [] }) {
   const [errorMsg, setErrorMsg] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState('Initializing...');
-  const [generateGradCAM, setGenerateGradCAM] = useState(true);
+  const [generateGradCAM, setGenerateGradCAM] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef(null);
+  const predictionRequestRef = useRef(null);
+
+  useEffect(() => () => predictionRequestRef.current?.abort(), []);
 
   const validateAndSetFile = (file) => {
     setErrorMsg(null);
@@ -61,21 +64,26 @@ export default function UploadPage({ onPredictionSuccess, sampleImages = [] }) {
   };
 
   const handlePredict = async () => {
-    if (!selectedFile) return;
+    if (!selectedFile || predictionRequestRef.current) return;
+
+    const request = new AbortController();
+    predictionRequestRef.current = request;
 
     setIsLoading(true);
     setErrorMsg(null);
-    setLoadingStage('Validating & preprocessing image (224x224 RGB)...');
+    setLoadingStage('Waiting for the prediction server to be ready…');
 
     try {
-      setTimeout(() => setLoadingStage('Running deep-learning inference...'), 400);
-      setTimeout(() => setLoadingStage('Generating Grad-CAM saliency heatmaps...'), 800);
+      await waitForPredictionServer(request.signal);
+      setLoadingStage(generateGradCAM ? 'Running classification and generating Grad-CAM…' : 'Running classification…');
 
-      const result = await predictSkinLesion(selectedFile, generateGradCAM);
+      const result = await predictSkinLesion(selectedFile, generateGradCAM, request.signal);
       onPredictionSuccess(result, previewUrl);
     } catch (err) {
-      setErrorMsg(err.message || 'Prediction failed. Please ensure the backend is running.');
-      setIsLoading(false);
+      if (!request.signal.aborted) setErrorMsg(err.message || 'Prediction failed. Please try again.');
+    } finally {
+      predictionRequestRef.current = null;
+      if (!request.signal.aborted) setIsLoading(false);
     }
   };
 
